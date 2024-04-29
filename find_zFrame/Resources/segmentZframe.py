@@ -8,6 +8,7 @@ def segment_zFrame(in_img, img_type='MR', withPlots=False):
     try:
         import matplotlib.pyplot as plt
     except ImportError:
+        print("WARNING: Failed to import matplotlib, not plots will be produced !")
         withPlots=False
     import math
     
@@ -40,8 +41,6 @@ def segment_zFrame(in_img, img_type='MR', withPlots=False):
         minThreshold_byVariation = hist_x[hist_diff_zc[hist_x[hist_diff_zc]>minThreshold_byCount][1]] #use the second minima after background (seems to work ok on t1)
         print("first maxima after background found: %f"%minThreshold_byVariation)
     elif img_type == 'CT':
-        secondSpikeVal_intens = hist_x[np.where(hist_y == hist_y[hist_x>minThreshold_byCount].max())]
-        #minThreshold_byVariation = hist_x[hist_diff_zc[hist_x[hist_diff_zc]>secondSpikeVal_intens]][0]
         minThreshold_byVariation_id = hist_diff_zc[hist_x[hist_diff_zc] > (minThreshold_byCount+100)][0]
         minThreshold_byVariation= hist_x[minThreshold_byVariation_id]
         print("first maxima after soft tissue found: %f"%minThreshold_byVariation)

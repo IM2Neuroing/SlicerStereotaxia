@@ -12,7 +12,16 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         print("WARNING: Failed to import matplotlib, not plots will be produced !")
         withPlots = False
 
-    def isPlate_size(bbox):
+    def isPlate_size(bbox: np.array) -> bool:
+        """Check if the bounding box is a plate. The plate is defined as a large object
+        that its largest side 0.3 of the smallest image side and has a ratio between the
+        smallest and the largest side of the obb greater than 4.
+        Args:
+            bbox (np.array): a bounding box of an object as outputted by sitk.LabelShapeStatisticsImageFilter
+
+        Returns:
+            bool: if it is a plate
+        """
         obb_size = np.array(bbox)
         if np.product(obb_size) == 0:
             return False
@@ -21,13 +30,44 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         image_occupy = np.sum(obb_size >= 0.5 * min(in_img_np.shape))
         return (image_occupy >= 1) and (obb_ratio > 4) and (np.sum(obb_size > 100) >= 2)
 
-    def isPlate_loc(centroid, allObjects_bboxCenter, allObjects_bboxSize):
+    def isPlate_loc(centroid, allObjects_bboxCenter, allObjects_bboxSize) -> bool:
+        """Determine if the label is a plate based on its location in the image.
+        Plates should have its centroid at least 30% of the smallest side of the
+        image away from the center of the image
+
+        Args:
+            centroid (_type_): plate centroid
+            allObjects_bboxCenter (_type_): centroid of all objects in image
+            allObjects_bboxSize (_type_): bbox size of all objects in image
+
+        Returns:
+            bool: if it is a plate
+        """
         return (
             np.linalg.norm(np.array(centroid) - np.array(allObjects_bboxCenter))
             > np.min(allObjects_bboxSize) * 0.3
         )
 
-    def threshold_plates_CT(in_img, minThreshold_byCount, hist_y, hist_x, withPlots=False):
+    def threshold_plates_CT(
+        in_img: sitk.Image,
+        minThreshold_byCount: float,
+        hist_y: np.array,
+        hist_x: np.array,
+        withPlots=False,
+    ) -> sitk.Image:
+        """Threshold a CT image to segment the stereotactic plates.
+        The threshold is the first maxima after the 90% threshold.
+
+        Args:
+            in_img (sitk.Image): The CT image
+            minThreshold_byCount (float): threshold to isolate higher intensities (typically top 90%)
+            hist_y (np.array): the histogram of the image
+            hist_x (np.array): the histogram bins
+            withPlots (bool, optional): wheither to plot graphs. Defaults to False.
+
+        Returns:
+            sitk.Image: The connected component image of the plates
+        """
         b, a = butter(2, 0.15, btype="low", analog=False)
         hist_y = filtfilt(b, a, hist_y)
 
@@ -81,7 +121,18 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         connectedComponentImage = sitk.ConnectedComponent(thresh_img)
         return connectedComponentImage
 
-    def threshold_plates_MR(in_img, minThreshold_byCount, withPlots=False):
+    def threshold_plates_MR(in_img, minThreshold_byCount, withPlots=False) -> sitk.Image:
+        """Threshold a MR image to segment the stereotactic plates.
+        The plates are extracted using cannny edge detection and connected component analysis.
+
+        Args:
+            in_img (sitk.Image): The MR image
+            minThreshold_byCount (float): threshold to isolate higher intensities (typically top 90%)
+            withPlots (bool, optional): wheither to plot graphs. Defaults to False.
+
+        Returns:
+            sitk.Image: The connected component image of the plates
+        """
         p90_img = in_img * sitk.Cast(in_img > minThreshold_byCount, in_img.GetPixelIDValue())
         # Mask in_image with minthreshold_byCount
         fg_img = p90_img * sitk.Cast(p90_img > minThreshold_byCount, p90_img.GetPixelIDValue())
@@ -94,7 +145,15 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         connected_img = sitk.RelabelComponent(connected_img, minimumObjectSize=100)
         return connected_img
 
-    def detectPlates(connected_img):
+    def detectPlates(connected_img: sitk.Image) -> sitk.Image:
+        """Shape analysis of the connected components to detect the plates
+
+        Args:
+            connected_img (sitk.Image): the connected component image after thresholding (each plate is a label)
+
+        Returns:
+            sitk.Image: connected image with only plates
+        """
         # only keep connected components that have two sides larger than one third of the smallest
         # dimension of the image and the third that is 4 times smaller
         stats_allObjs = sitk.LabelShapeStatisticsImageFilter()
@@ -137,9 +196,6 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         )
 
         return closed_img_orig
-
-    def refinePlates(in_img):
-        """refine the plates by optimizing a threshold down from the max intensity in the image"""
 
     in_img_np = sitk.GetArrayFromImage(in_img)
     voxelCount = in_img_np.shape[0] * in_img_np.shape[1] * in_img_np.shape[2]

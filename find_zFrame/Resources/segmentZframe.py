@@ -1,18 +1,51 @@
 import SimpleITK as sitk
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
 
 
 def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
     import numpy as np
-
+    import logging
     from scipy.signal import butter, filtfilt
 
     try:
         import matplotlib.pyplot as plt
     except ImportError:
-        print("WARNING: Failed to import matplotlib, not plots will be produced !")
+        logging.debug(
+            "WARNING: Failed to import matplotlib, not plots will be produced !"
+        )
         withPlots = False
 
-    def isPlate_size(bbox: np.array) -> bool:
+    # first, upsample in_image to isotropic resolution
+    # in_img_iso = sitk.Resample(
+    #     in_img,
+    #     in_img.GetSize(),
+    #     sitk.Transform(3, sitk.sitkIdentity),
+    #     sitk.sitkBSpline,
+    #     in_img.GetOrigin(),
+    #     [np.min(in_img.GetSpacing())] * 3,
+    #     in_img.GetDirection(),
+    #     0,
+    #     in_img.GetPixelIDValue(),
+    # )
+    in_img_iso = in_img
+
+    def pasteImageInRef(in_img: sitk.Image, ref_img: sitk.Image) -> sitk.Image:
+        out_img = sitk.Image(ref_img.GetSize(), ref_img.GetPixelIDValue())
+        out_img.CopyInformation(ref_img)
+        out_img = sitk.Paste(
+            ref_img,
+            sitk.Cast(in_img, ref_img.GetPixelIDValue()),
+            in_img.GetSize(),
+            [0, 0, 0],
+            ref_img.TransformPhysicalPointToIndex(
+                in_img.TransformIndexToPhysicalPoint([0, 0, 0])
+            ),
+        )
+        return out_img
+
+    def isPlate_size(bbox: np.array, in_img: sitk.Image) -> bool:
         """Check if the bounding box is a plate. The plate is defined as a large object
         that its largest side 0.3 of the smallest image side and has a ratio between the
         smallest and the largest side of the obb greater than 4.
@@ -27,7 +60,8 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
             return False
         # compute the ratio between the smallest and the largest side of obb
         obb_ratio = max(obb_size) / min(obb_size)
-        image_occupy = np.sum(obb_size >= 0.5 * min(in_img_np.shape))
+        img_extend = np.array(in_img.GetSize()) * np.array(in_img.GetSpacing())
+        image_occupy = np.sum(obb_size >= 0.5 * min(img_extend))
         return (image_occupy >= 1) and (obb_ratio > 4) and (np.sum(obb_size > 100) >= 2)
 
     def isPlate_loc(centroid, allObjects_bboxCenter, allObjects_bboxSize) -> bool:
@@ -75,14 +109,16 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
 
         hist_diff_zc = np.where(np.diff(np.sign(hist_diff)) == 2)[0].flatten()
         if withPlots:
-            print(hist_x[hist_diff_zc])
+            logging.debug(hist_x[hist_diff_zc])
 
         # minThreshold_byVariation = hist_x[hist_diff_zc[hist_x[hist_diff_zc]>secondSpikeVal_intens]][0]
         minThreshold_byVariation_id = hist_diff_zc[
             hist_x[hist_diff_zc] > (minThreshold_byCount + 100)
         ][0]
         minThreshold_byVariation = hist_x[minThreshold_byVariation_id]
-        print("first maxima after soft tissue found: %f" % minThreshold_byVariation)
+        logging.debug(
+            "first maxima after soft tissue found: %f" % minThreshold_byVariation
+        )
 
         if withPlots:
             fig, ax = plt.subplots(2, 1, sharex=True)
@@ -121,7 +157,9 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         connectedComponentImage = sitk.ConnectedComponent(thresh_img)
         return connectedComponentImage
 
-    def threshold_plates_MR(in_img, minThreshold_byCount, withPlots=False) -> sitk.Image:
+    def threshold_plates_MR(
+        in_img, minThreshold_byCount, withPlots=False
+    ) -> sitk.Image:
         """Threshold a MR image to segment the stereotactic plates.
         The plates are extracted using cannny edge detection and connected component analysis.
 
@@ -133,9 +171,13 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         Returns:
             sitk.Image: The connected component image of the plates
         """
-        p90_img = in_img * sitk.Cast(in_img > minThreshold_byCount, in_img.GetPixelIDValue())
+        p90_img = in_img * sitk.Cast(
+            in_img > minThreshold_byCount, in_img.GetPixelIDValue()
+        )
         # Mask in_image with minthreshold_byCount
-        fg_img = p90_img * sitk.Cast(p90_img > minThreshold_byCount, p90_img.GetPixelIDValue())
+        fg_img = p90_img * sitk.Cast(
+            p90_img > minThreshold_byCount, p90_img.GetPixelIDValue()
+        )
         # do edge detection on the fg_img
         edge_img = sitk.CannyEdgeDetection(sitk.Cast(fg_img, sitk.sitkFloat32))
         # merge labels that are in contact in the edge image
@@ -180,54 +222,217 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
                 filtered_img = sitk.Or(filtered_img, crop_img == label)
 
         # close holes in the resulting image
-        closed_img = sitk.BinaryMorphologicalClosing(filtered_img, (1, 1, 1), sitk.sitkBall)
+        closed_img = sitk.BinaryMorphologicalClosing(
+            filtered_img, (1, 1, 1), sitk.sitkBall
+        )
         # paste the closed image on the original image space
 
-        closed_img_orig = sitk.Image(connected_img.GetSize(), sitk.sitkUInt8)
-        closed_img_orig.CopyInformation(connected_img)
-        closed_img_orig = sitk.Paste(
-            closed_img_orig,
-            closed_img,
-            closed_img.GetSize(),
-            [0, 0, 0],
-            closed_img_orig.TransformPhysicalPointToIndex(
-                closed_img.TransformIndexToPhysicalPoint([0, 0, 0])
-            ),
-        )
+        closed_img_orig = pasteImageInRef(closed_img, connected_img)
 
         return closed_img_orig
 
-    in_img_np = sitk.GetArrayFromImage(in_img)
+    def refinePlate_thres(plate_img: sitk.Image) -> sitk.Image:
+        """Refine a plate image by optimizing a threshold starting from the max intensity of the plate
+        down until:
+        - the plate is a single connected component
+        - the voxels in the thresholded image are no more than 1mm from the voxels in the original image (distance map)
+
+        Args:
+            plate_img (sitk.Image): a binary image of a single plate
+
+        Raises:
+            ValueError: _description_
+
+        Returns:
+            sitk.Image: A binary image of the same single plate but refined
+        """
+        import scipy.optimize as opt
+
+        max_intensity = sitk.GetArrayFromImage(plate_img).max()
+        min_intensity = sitk.GetArrayFromImage(plate_img).min()
+
+        def objective(threshold):
+            thresholded_img = plate_img > threshold
+            largest_plate = plates_img > 0
+            # extract contours from both images
+            test_contour = sitk.LabelContour(thresholded_img)
+            ref_contour = sitk.LabelContour(largest_plate)
+            # compute the hausdorff distance between the two contours
+            distance_map = sitk.HausdorffDistanceImageFilter()
+            distance_map.Execute(test_contour, ref_contour)
+            mean_distance = distance_map.GetAverageHausdorffDistance()
+            # count the number of connected components
+            connected_img = sitk.ConnectedComponent(thresholded_img)
+            num_labels = sitk.GetArrayFromImage(connected_img).max() - 1
+            if num_labels == 0:
+                return 1000
+
+            logging.debug(
+                f"threshold: {threshold}, num_labels: {num_labels}, max_distance: {mean_distance}"
+            )
+            return num_labels / mean_distance
+
+        result = opt.minimize_scalar(
+            objective, bounds=(min_intensity, max_intensity), method="bounded"
+        )
+        refined_threshold = result.x
+        refined_img = plate_img > refined_threshold
+
+        return refined_img
+
+    def refinePlate_seedGrow(plate_img: sitk.Image) -> sitk.Image:
+        """Alternate version of refinePlate using a seed growing algorithm
+
+        Args:
+            plate_img (sitk.Image): _description_
+
+        Returns:
+            sitk.Image: _description_
+        """
+        import scipy.optimize as opt
+
+        # Get the top 10% intensity voxels as seeds
+        max_intensity = float(sitk.GetArrayFromImage(plate_img).max())
+        min_intensity = float(sitk.GetArrayFromImage(plate_img).min())
+        top_10_percent = np.percentile(
+            sitk.GetArrayFromImage(plate_img)[sitk.GetArrayFromImage(plate_img) > 0], 95
+        )
+        seeds = np.reshape(
+            np.argwhere(sitk.GetArrayFromImage(plate_img) >= top_10_percent), [-1, 3]
+        )[:, ::-1].tolist()
+        logging.debug(
+            f"10 percentile threshold {top_10_percent} | Number of seeds: {len(seeds)}"
+        )
+        largest_plate = plates_img > 0
+        ref_contour = sitk.LabelContour(largest_plate, fullyConnected=True)
+
+        def objective(lower_threshold):
+
+            # Perform seed growing with the given lower threshold
+            thresholded_img = sitk.ConnectedThreshold(
+                plate_img, seedList=seeds, lower=lower_threshold, upper=max_intensity
+            )
+            thres_img_conn = sitk.ConnectedComponent(thresholded_img)
+            label_number = sitk.GetArrayFromImage(thres_img_conn).max()
+            # extract contours from both images
+            test_contour = sitk.LabelContour(thresholded_img, fullyConnected=True)
+            # compute the hausdorff distance between the two contours
+            hausdorff_filter = sitk.HausdorffDistanceImageFilter()
+            hausdorff_filter.Execute(test_contour, ref_contour)
+            mean_distance = hausdorff_filter.GetAverageHausdorffDistance()
+            logging.debug(
+                f"Lower threshold: {lower_threshold} \n\tMean distance: {mean_distance}"
+            )
+            return (10 * label_number) / mean_distance
+
+        # Optimize the lower threshold to minimize the mean Hausdorff distance
+        logging.debug(
+            f"Optimizing lower threshold between {min_intensity} and {0.9*top_10_percent}"
+        )
+        result = opt.minimize_scalar(
+            objective, bounds=(min_intensity, 0.9 * top_10_percent), method="bounded"
+        )
+        refined_lower_threshold = result.x
+
+        # Perform seed growing with the refined lower threshold
+        refined_seg_img = sitk.ConnectedThreshold(
+            plate_img,
+            seedList=seeds,
+            lower=refined_lower_threshold,
+            upper=max_intensity,
+        )
+
+        return refined_seg_img
+
+    def refinePlate_squeletize(plate_img: sitk.Image) -> sitk.Image:
+        """Squeletize the plate
+
+        Args:
+            plate_img (sitk.Image): The plate image
+
+        Returns:
+            sitk.Image: The plate image as 1 voxel thick
+        """
+        binary_thinning = sitk.BinaryThinningImageFilter()
+        skeleton_img = binary_thinning.Execute(plate_img)
+        # This is not very good, as it is based on a 2D implementation,
+        # it thins a lot in one axis
+        # what comes after does not work well either: the BinaryThinning filter produces a very flat skeleton
+        # (thin in only one direction) then using the values in the result of the thinning to do the connected threshold
+        # does not change much, as we include voxels with low values as well.
+        seeds = sitk.GetArrayFromImage(skeleton_img) > 0
+        seedsLoc = np.argwhere(seeds)
+        seedsLoc_flat = np.reshape(seedsLoc, [-1, 3])
+        seeds_values = sitk.GetArrayFromImage(plate_img)[seeds]
+        print(
+            f"Min seed value {np.min(seeds_values)} | Max seed value {np.max(seeds_values)}"
+        )
+        thresholded_img = sitk.ConnectedThreshold(
+            plate_img,
+            seedList=seedsLoc_flat[:, ::-1].tolist(),
+            lower=float(np.min(seeds_values)),
+            upper=float(np.max(seeds_values)),
+        )
+
+        return thresholded_img
+
+    def refinePlates(plates_img: sitk.Image) -> sitk.Image:
+        """Refine all plates in the image
+
+        Args:
+            plates_img (sitk.Image): the plate image masked with the plate mask
+
+        Returns:
+            sitk.Image: a binary image of all plates refined
+        """
+        refined_img = sitk.Image(plates_img.GetSize(), plates_img.GetPixelIDValue())
+        refined_img.CopyInformation(plates_img)
+        plates_conn = sitk.ConnectedComponent(plates_img)
+        stats = sitk.LabelShapeStatisticsImageFilter()
+        stats.Execute(plates_conn)
+        for label in stats.GetLabels():
+            logging.debug(f"Refining plate {label}")
+            thisPlate_mask = plates_conn == label
+            thisPlate_img = sitk.Mask(plates_img, thisPlate_mask)
+            refined_plate = refinePlate_thres(thisPlate_img)
+            refined_img = sitk.Or(
+                refined_img, sitk.Cast(refined_plate, refined_img.GetPixelIDValue())
+            )
+        return refined_img
+
+    in_img_np = sitk.GetArrayFromImage(in_img_iso)
     voxelCount = in_img_np.shape[0] * in_img_np.shape[1] * in_img_np.shape[2]
 
     hist_y, hist_x = np.histogram(in_img_np.flatten(), bins=int(in_img_np.max() / 4))
-
     hist_x = hist_x[1:]
 
     # filter the histogram
-
     cumHist_y = np.cumsum(hist_y.astype(float)) / voxelCount
     # we postulate that the background contain half of the voxels
     minThreshold_byCount = hist_x[np.where(cumHist_y > 0.90)[0][0]]
-
-    print(f"background threshold by count found: {minThreshold_byCount}")
+    logging.debug(f"background threshold by count found: {minThreshold_byCount}")
 
     if img_type == "CT":
-        plates_img = threshold_plates_CT(in_img, minThreshold_byCount, hist_y, hist_x, withPlots)
+        plates_img = threshold_plates_CT(
+            in_img_iso, minThreshold_byCount, hist_y, hist_x, withPlots
+        )
     elif img_type == "MR":
-        plates_img = threshold_plates_MR(in_img, minThreshold_byCount, withPlots)
+        plates_img = threshold_plates_MR(in_img_iso, minThreshold_byCount, withPlots)
     else:
         raise ValueError("Unknown image type")
-
     # paste the plate images on the original image space
-
-    return detectPlates(plates_img)
+    return sitk.Mask(
+        in_img_iso,
+        pasteImageInRef(refinePlates(detectPlates(plates_img) > 0), in_img_iso),
+    )
 
 
 def segment_zFrame_filesystem(in_file, out_file, img_type):
     import SimpleITK as sitk
 
-    sitk.WriteImage(segment_zFrame(sitk.ReadImage(in_file), img_type, withPlots=True), out_file)
+    sitk.WriteImage(
+        segment_zFrame(sitk.ReadImage(in_file), img_type, withPlots=True), out_file
+    )
 
 
 def segment_zFrame_slicer(inputVolume, outputVolume, img_type):
@@ -239,18 +444,26 @@ def segment_zFrame_slicer(inputVolume, outputVolume, img_type):
         slicer.util.pip_install("scipy")
 
     in_img = siu.PullVolumeFromSlicer(inputVolume)
-    siu.PushVolumeToSlicer(segment_zFrame(in_img, img_type, withPlots=False), outputVolume)
+    siu.PushVolumeToSlicer(
+        segment_zFrame(in_img, img_type, withPlots=False), outputVolume
+    )
 
 
 if __name__ == "__main__":
     import argparse, os
+    import logging
 
+    logging.basicConfig(level=logging.DEBUG)
     argParser = argparse.ArgumentParser()
     argParser.add_argument(
         "-i", "--input_image", nargs=1, help="Stereotactic image.", required=True
     )
     argParser.add_argument(
-        "-o", "--output_image", nargs=1, help="Segmented stereotactic frame.", required=True
+        "-o",
+        "--output_image",
+        nargs=1,
+        help="Segmented stereotactic frame.",
+        required=True,
     )
     argParser.add_argument("-t", "--image_type", nargs=1, help="MR/CT", required=False)
     args = argParser.parse_args()

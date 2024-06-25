@@ -473,6 +473,8 @@ class find_zFrameLogic(ScriptedLoadableModuleLogic):
         icp.GetLandmarkTransform().SetModeToRigidBody()
         icp.SetMaximumNumberOfIterations(int(1E9))
         icp.SetMaximumMeanDistance(0.0001)
+        # icp.SetMeanDistanceModeToAbsoluteValue()
+        icp.SetMeanDistanceModeToRMS()
         icp.SetMaximumNumberOfLandmarks(movingZ.GetPolyData().GetNumberOfPoints())
         icp.CheckMeanDistanceOn()
         icp.SetStartByMatchingCentroids(True)
@@ -481,7 +483,7 @@ class find_zFrameLogic(ScriptedLoadableModuleLogic):
         icp.GetMatrix(outputMatrix)
         outputTransform.SetMatrixTransformToParent(outputMatrix)
         
-        logging.info('ICP registration done')
+        logging.info('ICP registration done, Mean distance: %f, number of iterations: %i'%(icp.GetMeanDistance(), icp.GetNumberOfIterations()))
 
         return True
 

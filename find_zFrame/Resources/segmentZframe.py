@@ -31,6 +31,72 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
     # )
     in_img_iso = in_img
 
+    def calculate_surface_distances(reference_segmentation, segmented_segmentation):
+        """
+        Calculate the surface distances between two segmentations.
+
+        Args:
+            reference_segmentation (SimpleITK.Image): The reference segmentation.
+            segmented_segmentation (SimpleITK.Image): The segmented segmentation.
+
+        Returns:
+            list: A list of surface distances between the two segmentations.
+        """
+        # Use the absolute values of the distance map to compute the surface distances (distance map sign, outside or inside
+        # relationship, is irrelevant)
+        reference_distance_map = sitk.Abs(
+            sitk.SignedMaurerDistanceMap(
+                reference_segmentation, squaredDistance=False, useImageSpacing=True
+            )
+        )
+        reference_surface = sitk.LabelContour(reference_segmentation)
+
+        segmented_distance_map = sitk.Abs(
+            sitk.SignedMaurerDistanceMap(
+                segmented_segmentation, squaredDistance=False, useImageSpacing=True
+            )
+        )
+        segmented_surface = sitk.LabelContour(segmented_segmentation)
+
+        statistics_image_filter = sitk.StatisticsImageFilter()
+        # Get the number of pixels in the reference surface by counting all pixels that are 1.
+        statistics_image_filter.Execute(reference_surface)
+        num_reference_surface_pixels = int(statistics_image_filter.GetSum())
+
+        # Get the number of pixels in the segmented surface by counting all pixels that are 1.
+        statistics_image_filter.Execute(segmented_surface)
+        num_segmented_surface_pixels = int(statistics_image_filter.GetSum())
+
+        # Multiply the binary surface segmentations with the distance maps. The resulting distance
+        # maps contain non-zero values only on the surface (they can also contain zero on the surface)
+        seg2ref_distance_map = reference_distance_map * sitk.Cast(
+            segmented_surface, sitk.sitkFloat32
+        )
+        ref2seg_distance_map = segmented_distance_map * sitk.Cast(
+            reference_surface, sitk.sitkFloat32
+        )
+
+        # Get all non-zero distances and then add zero distances if required.
+        seg2ref_distance_map_arr = sitk.GetArrayViewFromImage(seg2ref_distance_map)
+        seg2ref_distances = list(
+            seg2ref_distance_map_arr[seg2ref_distance_map_arr != 0]
+        )
+        seg2ref_distances = seg2ref_distances + list(
+            np.zeros(num_segmented_surface_pixels - len(seg2ref_distances))
+        )
+
+        ref2seg_distance_map_arr = sitk.GetArrayViewFromImage(ref2seg_distance_map)
+        ref2seg_distances = list(
+            ref2seg_distance_map_arr[ref2seg_distance_map_arr != 0]
+        )
+        ref2seg_distances = ref2seg_distances + list(
+            np.zeros(num_reference_surface_pixels - len(ref2seg_distances))
+        )
+
+        all_surface_distances = seg2ref_distances + ref2seg_distances
+
+        return all_surface_distances
+
     def pasteImageInRef(in_img: sitk.Image, ref_img: sitk.Image) -> sitk.Image:
         out_img = sitk.Image(ref_img.GetSize(), ref_img.GetPixelIDValue())
         out_img.CopyInformation(ref_img)
@@ -61,7 +127,7 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         # compute the ratio between the smallest and the largest side of obb
         obb_ratio = max(obb_size) / min(obb_size)
         img_extend = np.array(in_img.GetSize()) * np.array(in_img.GetSpacing())
-        image_occupy = np.sum(obb_size >= 0.5 * min(img_extend))
+        image_occupy = np.sum(obb_size >= (0.5 * min(img_extend)))
         return (image_occupy >= 1) and (obb_ratio > 4) and (np.sum(obb_size > 100) >= 2)
 
     def isPlate_loc(centroid, allObjects_bboxCenter, allObjects_bboxSize) -> bool:
@@ -214,20 +280,24 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
             if np.product(obb_size) == 0:
                 continue
 
-            if isPlate_size(stats.GetOrientedBoundingBoxSize(label)) and isPlate_loc(
+            if isPlate_size(
+                stats.GetOrientedBoundingBoxSize(label), crop_img
+            ) and isPlate_loc(
                 stats.GetCentroid(label),
                 stats_allObjs.GetCentroid(1),
                 stats_allObjs.GetOrientedBoundingBoxSize(1),
             ):
+                logging.debug(f"Label {label} detected as plate")
                 filtered_img = sitk.Or(filtered_img, crop_img == label)
 
         # close holes in the resulting image
         closed_img = sitk.BinaryMorphologicalClosing(
-            filtered_img, (1, 1, 1), sitk.sitkBall
+            filtered_img > 0, (1, 1, 1), sitk.sitkBall
         )
         # paste the closed image on the original image space
-
-        closed_img_orig = pasteImageInRef(closed_img, connected_img)
+        closed_img_orig = pasteImageInRef(
+            closed_img, sitk.Cast(connected_img * 0, closed_img.GetPixelIDValue())
+        )
 
         return closed_img_orig
 
@@ -307,7 +377,6 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         ref_contour = sitk.LabelContour(largest_plate, fullyConnected=True)
 
         def objective(lower_threshold):
-
             # Perform seed growing with the given lower threshold
             thresholded_img = sitk.ConnectedThreshold(
                 plate_img, seedList=seeds, lower=lower_threshold, upper=max_intensity
@@ -316,10 +385,9 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
             label_number = sitk.GetArrayFromImage(thres_img_conn).max()
             # extract contours from both images
             test_contour = sitk.LabelContour(thresholded_img, fullyConnected=True)
-            # compute the hausdorff distance between the two contours
-            hausdorff_filter = sitk.HausdorffDistanceImageFilter()
-            hausdorff_filter.Execute(test_contour, ref_contour)
-            mean_distance = hausdorff_filter.GetAverageHausdorffDistance()
+            mean_distance = np.mean(
+                calculate_surface_distances(test_contour, ref_contour)
+            )
             logging.debug(
                 f"Lower threshold: {lower_threshold} \n\tMean distance: {mean_distance}"
             )
@@ -344,7 +412,7 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
 
         return refined_seg_img
 
-    def refinePlate_squeletize(plate_img: sitk.Image) -> sitk.Image:
+    def refinePlate_squeletize_itk(plate_img: sitk.Image) -> sitk.Image:
         """Squeletize the plate
 
         Args:
@@ -360,27 +428,49 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         # what comes after does not work well either: the BinaryThinning filter produces a very flat skeleton
         # (thin in only one direction) then using the values in the result of the thinning to do the connected threshold
         # does not change much, as we include voxels with low values as well.
-        seeds = sitk.GetArrayFromImage(skeleton_img) > 0
-        seedsLoc = np.argwhere(seeds)
-        seedsLoc_flat = np.reshape(seedsLoc, [-1, 3])
-        seeds_values = sitk.GetArrayFromImage(plate_img)[seeds]
-        print(
-            f"Min seed value {np.min(seeds_values)} | Max seed value {np.max(seeds_values)}"
-        )
-        thresholded_img = sitk.ConnectedThreshold(
-            plate_img,
-            seedList=seedsLoc_flat[:, ::-1].tolist(),
-            lower=float(np.min(seeds_values)),
-            upper=float(np.max(seeds_values)),
-        )
+        # seeds = sitk.GetArrayFromImage(skeleton_img) > 0
+        # seedsLoc = np.argwhere(seeds)
+        # seedsLoc_flat = np.reshape(seedsLoc, [-1, 3])
+        # seeds_values = sitk.GetArrayFromImage(plate_img)[seeds]
+        # print(
+        #     f"Min seed value {np.min(seeds_values)} | Max seed value {np.max(seeds_values)}"
+        # )
+        # thresholded_img = sitk.ConnectedThreshold(
+        #     plate_img,
+        #     seedList=seedsLoc_flat[:, ::-1].tolist(),
+        #     lower=float(np.min(seeds_values)),
+        #     upper=float(np.max(seeds_values)),
+        # )
 
-        return thresholded_img
+        return skeleton_img
 
-    def refinePlates(plates_img: sitk.Image) -> sitk.Image:
+    def refined_plate_squeletize_skimage(plate_img: sitk.Image) -> sitk.Image:
+        """Squeletize the plate
+
+        Args:
+            plate_img (sitk.Image): The plate image
+
+        Returns:
+            sitk.Image: The plate image as 1 voxel thick
+        """
+        import skimage.morphology as skmorph
+
+        plate_img_np = sitk.GetArrayFromImage(plate_img)
+        plate_img_np = plate_img_np > 0
+        plate_img_np = skmorph.skeletonize(plate_img_np)
+        res = sitk.GetImageFromArray(plate_img_np.astype(np.uint8))
+        res.SetDirection(plate_img.GetDirection())
+        res.SetOrigin(plate_img.GetOrigin())
+        res.SetSpacing(plate_img.GetSpacing())
+        
+        return sitk.BinaryDilate(res, (1,1,1), sitk.sitkBall)
+
+    def refinePlates(plates_img: sitk.Image, refineMethod: str) -> sitk.Image:
         """Refine all plates in the image
 
         Args:
             plates_img (sitk.Image): the plate image masked with the plate mask
+            refineMethod (str): the method to refine the plates ("thres", "seedGrow" or "squeletize")
 
         Returns:
             sitk.Image: a binary image of all plates refined
@@ -390,16 +480,35 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
         plates_conn = sitk.ConnectedComponent(plates_img)
         stats = sitk.LabelShapeStatisticsImageFilter()
         stats.Execute(plates_conn)
+        if stats.GetNumberOfLabels() > 10:
+            logging.debug(
+                f"Number of plates detected: {stats.GetNumberOfLabels()}. Something went wrong with the segmentation."
+            )
+            return ValueError("Too many plates detected")
         for label in stats.GetLabels():
             logging.debug(f"Refining plate {label}")
             thisPlate_mask = plates_conn == label
             thisPlate_img = sitk.Mask(plates_img, thisPlate_mask)
-            refined_plate = refinePlate_thres(thisPlate_img)
+
+            if refineMethod == "thres":
+                refined_plate = refinePlate_thres(thisPlate_img)
+            elif refineMethod == "seedGrow":
+                refined_plate = refinePlate_seedGrow(thisPlate_img)
+            elif refineMethod == "squeletize_itk":
+                refined_plate = refinePlate_squeletize_itk(thisPlate_img)
+            elif refineMethod == "squeletize_skimage":
+                refined_plate = refined_plate_squeletize_skimage(thisPlate_img)
+            else:
+                raise ValueError("Unknown refinement method")
+
             refined_img = sitk.Or(
                 refined_img, sitk.Cast(refined_plate, refined_img.GetPixelIDValue())
             )
         return refined_img
 
+    ################################################################################################
+    ## MAIN
+    ################################################################################################
     in_img_np = sitk.GetArrayFromImage(in_img_iso)
     voxelCount = in_img_np.shape[0] * in_img_np.shape[1] * in_img_np.shape[2]
 
@@ -421,9 +530,17 @@ def segment_zFrame(in_img: sitk.Image, img_type="MR", withPlots=False):
     else:
         raise ValueError("Unknown image type")
     # paste the plate images on the original image space
-    return sitk.Mask(
-        in_img_iso,
-        pasteImageInRef(refinePlates(detectPlates(plates_img) > 0), in_img_iso),
+    refined_plates = refinePlates(detectPlates(plates_img) > 0, "squeletize_skimage")
+    # refined_plates = detectPlates(plates_img)>0
+    return (
+        sitk.Mask(
+            in_img_iso,
+            pasteImageInRef(
+                refined_plates > 0,
+                sitk.Cast(in_img_iso * 0, refined_plates.GetPixelIDValue()),
+            ),
+        )
+        > 0
     )
 
 
@@ -439,9 +556,11 @@ def segment_zFrame_slicer(inputVolume, outputVolume, img_type):
     import sitkUtils as siu
 
     try:
-        import scipy
+        import scipy, skimage
     except ImportError as e:
         slicer.util.pip_install("scipy")
+        slicer.util.pip_install("scikit-image")
+        import scipy, skimage
 
     in_img = siu.PullVolumeFromSlicer(inputVolume)
     siu.PushVolumeToSlicer(
@@ -452,6 +571,8 @@ def segment_zFrame_slicer(inputVolume, outputVolume, img_type):
 if __name__ == "__main__":
     import argparse, os
     import logging
+    import numpy as np
+    import SimpleITK as sitk
 
     logging.basicConfig(level=logging.DEBUG)
     argParser = argparse.ArgumentParser()

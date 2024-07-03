@@ -563,7 +563,7 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
         if slicer.mrmlScene.GetNodesByName("leksell2RAS").GetNumberOfItems() == 0:
             slicer.util.loadTransform(os.path.join(os.path.split(__file__)[0], "Resources", "leksell2RAS.h5"))
 
-        return self.transformNode_to_numpy4x4(slicer.mrmlScene.GetNodesByName("leksell2RAS").GetItemAsObject(0))
+        return self.transformNode_to_numpy4x4([i for i in slicer.mrmlScene.GetNodesByClass("vtkMRMLTransformNode") if i.GetName().startswith("leksell2RAS")][0])
 
     def RAStoXYZ(self, ras):
         import numpy as np
@@ -576,7 +576,7 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
         if slicer.mrmlScene.GetNodesByName("leksell2RAS").GetNumberOfItems() == 0:
             slicer.util.loadTransform(os.path.join(os.path.split(__file__)[0], "Resources", "leksell2RAS.h5"))
 
-        XYZ2RAStransformation = self.transformNode_to_numpy4x4(slicer.mrmlScene.GetNodesByName("leksell2RAS").GetItemAsObject(0))
+        XYZ2RAStransformation = self.transformNode_to_numpy4x4([i for i in slicer.mrmlScene.GetNodesByClass("vtkMRMLTransformNode") if i.GetName().startswith("leksell2RAS")][0])
         RAS2XYZtransformation = np.linalg.inv(XYZ2RAStransformation)
         return RAS2XYZtransformation
 

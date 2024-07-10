@@ -335,17 +335,32 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
 
         T1_diso = slicer.vtkMRMLScalarVolumeNode()
         T1_diso.Copy(self.referenceImage_selectionCombo.currentNode())
-        T1_diso.SetName(T1_diso.GetName() + "_noOrient_vtk")
-        RAStoIJK = vtk.vtkMatrix4x4()
-        RAStoIJK.DeepCopy(
+        T1_diso.SetName(T1_diso.GetName() + "_noOrient")
+        diso_direction = vtk.vtkMatrix4x4()
+        diso_direction.DeepCopy(
             np.array([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]).ravel()
         )
-        T1_diso.SetRASToIJKMatrix(RAStoIJK)
+        T1_diso.SetRASToIJKMatrix(diso_direction)
         T1_diso.SetSpacing(
             self.referenceImage_selectionCombo.currentNode().GetSpacing()
         )
         T1_diso.SetOrigin([0, 0, 0])
         slicer.mrmlScene.AddNode(T1_diso)
+
+        IJK2RAS = slicer.vtkMRMLTransformNode()
+        IJK2RAS.SetName("IJK2RAS_" + self.referenceImage_selectionCombo.currentNode().GetName())
+        IJK2RAS.SetMatrixTransformToParent(
+            slicer.util.vtkMatrixFromArray(
+                np.linalg.inv(
+                    slicer.util.arrayFromVTKMatrix(
+                        self.referenceImage_selectionCombo.currentNode().GetIJKToRASMatrix()
+                    )
+                )
+            )
+        )
+        slicer.mrmlScene.AddNode(IJK2RAS)
+
+
 
     #########################################################################################################
     # end connections

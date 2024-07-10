@@ -309,9 +309,23 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
         #     f"{updatedNode.GetName()} was modified. The associated table: {coordTable.GetName()} will be updated."
         # )
         coordTable.SetName(updatedNode.GetName() + "_coordsConversion")
-        self.logic.updatePointsAfterMove(coordTable, updatedNode, self.referenceImage_selectionCombo.currentNode(), self.frameTransform_selectionCombo.currentNode())
+        self.logic.updatePointsAfterMove(
+            coordTable,
+            updatedNode,
+            self.referenceImage_selectionCombo.currentNode(),
+            self.frameTransform_selectionCombo.currentNode(),
+        )
 
     def onAddBtnClicked(self):
+        # check that we have less than two control points
+        if (
+            self.fiducialGroup_selectionCombo.currentNode().GetNumberOfControlPoints()
+            > 1
+        ):
+            logging.error(
+                "You can only have two control points in the trajectory. Remove one before adding a new one."
+            )
+            return
         self.addPointFromStereoSetting(
             self.GetCoordTable(),
             self.xField.value,
@@ -322,7 +336,7 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
             self.depthField.value,
             self.fiducialGroup_selectionCombo.currentNode().GetName()
             + "_"
-            + self.nameField.text
+            + self.nameField.text,
         )
         self.logic.table2ControlPoint(
             self.GetCoordTable(), self.fiducialGroup_selectionCombo.currentNode()
@@ -348,7 +362,9 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
         slicer.mrmlScene.AddNode(T1_diso)
 
         IJK2RAS = slicer.vtkMRMLTransformNode()
-        IJK2RAS.SetName("IJK2RAS_" + self.referenceImage_selectionCombo.currentNode().GetName())
+        IJK2RAS.SetName(
+            "IJK2RAS_" + self.referenceImage_selectionCombo.currentNode().GetName()
+        )
         IJK2RAS.SetMatrixTransformToParent(
             slicer.util.vtkMatrixFromArray(
                 np.linalg.inv(
@@ -359,8 +375,6 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
             )
         )
         slicer.mrmlScene.AddNode(IJK2RAS)
-
-
 
     #########################################################################################################
     # end connections
@@ -376,15 +390,21 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
             return slicer.mrmlScene.GetNodeByID(coordTableID)
         else:
             return None
-        
+
     def addPointFromStereoSetting(self, tableNode, x, y, z, r, a, d, label):
         row = tableNode.AddEmptyRow()
-        X, Y, Z, _ = self.logic.GetXYZcoordFromStereoSetings(x, y, z, r, a, d, paralellTraj=self.paralellTraj.currentText)
+        X, Y, Z, _ = self.logic.GetXYZcoordFromStereoSetings(
+            x, y, z, r, a, d, paralellTraj=self.paralellTraj.currentText
+        )
 
         trajTransform = slicer.vtkMRMLTransformNode()
         trajTransform.SetName(label)
         trajTransform.SetMatrixTransformToParent(
-            slicer.util.vtkMatrixFromArray(self.logic.GetTrajectoryTransform(x, y, z, r, a, paralellTraj=self.paralellTraj.currentText))
+            slicer.util.vtkMatrixFromArray(
+                self.logic.GetTrajectoryTransform(
+                    x, y, z, r, a, paralellTraj=self.paralellTraj.currentText
+                )
+            )
         )
         slicer.mrmlScene.AddNode(trajTransform)
 
@@ -405,7 +425,7 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
             self.referenceImage_selectionCombo.currentNode(),
             self.frameTransform_selectionCombo.currentNode(),
         )
-  
+
     # Refresh Apply button state
     # self.onSelect()
 
@@ -427,7 +447,9 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
     def GetXYZcoordFromStereoSetings(self, x, y, z, r, a, d, paralellTraj="Central"):
         import numpy as np
 
-        coord = self.GetTrajectoryTransform(x, y, z, r, a, paralellTraj=paralellTraj) @ np.array([d, 0, 0, 1])
+        coord = self.GetTrajectoryTransform(
+            x, y, z, r, a, paralellTraj=paralellTraj
+        ) @ np.array([d, 0, 0, 1])
         return coord.tolist()
 
     def GetTrajectoryTransform(self, x, y, z, r, a, paralellTraj="Central"):
@@ -494,7 +516,9 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
             ]
 
             [R, A, S] = self.XYZtoRAS(xyz)
-            [i, j, k] = self.RASpatToIJK(self.RAStoRASpat(self.XYZtoRAS(xyz), frameTransform), refImage)
+            [i, j, k] = self.RASpatToIJK(
+                self.RAStoRASpat(self.XYZtoRAS(xyz), frameTransform), refImage
+            )
 
             tableNode.SetCellText(iRow, tableNode.GetColumnIndex("R"), "%.02f" % R)
             tableNode.SetCellText(iRow, tableNode.GetColumnIndex("A"), "%.02f" % A)
@@ -542,7 +566,9 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
                 [x, y, z, r, a, d] = xyzradList[irow]
                 [X, Y, Z] = XYZList[irow]
                 [R, A, S] = RASList[irow]
-                [i, j, k] = self.RASpatToIJK(self.RAStoRASpat([R, A, S], frameTransform), ref_img)
+                [i, j, k] = self.RASpatToIJK(
+                    self.RAStoRASpat([R, A, S], frameTransform), ref_img
+                )
 
                 # Refill Table
                 row = tableNode.AddEmptyRow()
@@ -583,7 +609,9 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
                 label = labels[irow]
                 [X, Y, Z] = XYZList[irow]
                 [R, A, S] = RASList[irow]
-                [i, j, k] = self.RASpatToIJK(self.RAStoRASpat([R, A, S], frameTransform), ref_img)
+                [i, j, k] = self.RASpatToIJK(
+                    self.RAStoRASpat([R, A, S], frameTransform), ref_img
+                )
 
                 # Refill Table
                 row = tableNode.AddEmptyRow()
@@ -605,15 +633,20 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
         import math
         import numpy as np
 
-        xyzradList = []
+        # identify the target point (the closest to 100,100,100 ,center of the leksell frame)
+        point_dist = np.linalg.norm(
+            np.array(XYZList).reshape(2, 3) - np.array([100] * 6).reshape(2, 3), axis=1
+        )
+        target_id = np.argmin(point_dist)
+        entry_id = np.argmax(point_dist)
+        target = np.array(XYZList[target_id])
+        entry = np.array(XYZList[entry_id])
 
-        # Coordinates of the two points
-        x1, y1, z1 = XYZList[0]
-        x2, y2, z2 = XYZList[1]
+        xyzradList = [[[0.0] * 6] * 2]
 
         # Define a vector as a tuple of three floats representing its XYZ components
 
-        vector = np.array([x2 - x1, y2 - y1, z1 - z2])
+        vector = entry - target
 
         # Calculate the length of the vector
         distance = np.linalg.norm(vector)
@@ -623,7 +656,7 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
         arc = math.degrees(math.acos(vector[0] / distance))
 
         # Calculate the angle between the Y-axis and the vector
-        distYZPlane = np.linalg.norm(np.array([y2 - y1, z1 - z2]))
+        distYZPlane = np.linalg.norm(np.array([entry[1] - target[1], target[2] - entry[2]]))
         ring = math.degrees(math.acos(vector[1] / distYZPlane))
 
         if vector[2] > 0 or arc == 180:
@@ -632,8 +665,9 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
         else:
             ring = 180 - ring
 
-        xyzradList.append([x1, y1, z1, ring, arc, 0])
-        xyzradList.append([x1, y1, z1, ring, arc, distance])
+        xyzradList[target_id] = XYZList[target_id] + [ring, arc, 0]
+        xyzradList[entry_id] = XYZList[target_id] + [ring, arc, distance]
+
         return xyzradList
 
     def fiducial2Table(self, tableNode, fiducialNode):
@@ -723,14 +757,14 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
     def GetRAStoRASpatTrans(self, currentFrameTransform):
         import numpy as np
 
-        return self.transformNode_to_numpy4x4(
-            currentFrameTransform
-        )
+        return self.transformNode_to_numpy4x4(currentFrameTransform)
 
     def RAStoRASpat(self, xyz, frametransform):
         import numpy as np
 
-        res = np.dot(self.GetRAStoRASpatTrans(frametransform), np.array(xyz + [1])).tolist()[:3]
+        res = np.dot(
+            self.GetRAStoRASpatTrans(frametransform), np.array(xyz + [1])
+        ).tolist()[:3]
         return res
 
     def GetRASpatToIJKtrans(self, ref_img):
@@ -764,7 +798,9 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
         import numpy as np
 
         # return np.dot(np.linalg.inv(IJKtoPatRAS), np.dot( np.linalg.inv(LPS2RAS), np.array(xyz+[1]))).tolist()[:3]
-        return np.dot(self.GetRASpatToIJKtrans(ref_img), np.array(xyz + [1])).tolist()[:3]
+        return np.dot(self.GetRASpatToIJKtrans(ref_img), np.array(xyz + [1])).tolist()[
+            :3
+        ]
 
     def GetLeksell2IJKtrans(self, x, y, z, r, a, ref_img):
         import numpy as np
@@ -796,7 +832,6 @@ class stereo_pointsLogic(ScriptedLoadableModuleLogic):
         return np.array(
             [vtkMat.GetElement(i, j) for i in range(4) for j in range(4)]
         ).reshape([4, 4])
-
 
 
 class stereo_pointsTest(ScriptedLoadableModuleTest):

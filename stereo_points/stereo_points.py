@@ -288,8 +288,6 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
                 ]
             )
             self.fiducialGroup_selectionCombo.setCurrentNode(newNode)
-        # first populate the table with the markers in the fiducialNode
-        # self.fiducial2Table(coordTable, newNode)
         self.pointTableView.setMRMLTableNode(self.GetCoordTable())
         self.pointTableView.setFirstRowLocked(True)
         self.pointTableView.show()
@@ -305,9 +303,6 @@ class stereo_pointsWidget(ScriptedLoadableModuleWidget):
 
     def onControlPointNodeModified(self, updatedNode, eventType):
         coordTable = updatedNode.GetNodeReference("stereotaxia_coordTable")
-        # logging.debug(
-        #     f"{updatedNode.GetName()} was modified. The associated table: {coordTable.GetName()} will be updated."
-        # )
         coordTable.SetName(updatedNode.GetName() + "_coordsConversion")
         self.logic.updatePointsAfterMove(
             coordTable,
